@@ -142,10 +142,16 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     filterParts.push(`${inA}[${name}]overlay=${x}:${y}${outL}`);
   });
 
-  /* -ss / -t BEFORE -i = fast input-side seek (only reads selected segment) */
-  const seekArgs = [];
-  if (trimStart    >  0.01) seekArgs.push("-ss", trimStart.toFixed(3));
-  if (trimDuration != null) seekArgs.push("-t",  trimDuration.toFixed(3));
+  /* Input-side seek: -ss and -t MUST come before -i for fast keyframe seek.
+     Always emit -ss (even when 0) so FFmpeg knows the segment is intentional. */
+  const isTrimmed = trimDuration != null;
+  const seekArgs  = isTrimmed
+    ? ["-ss", trimStart.toFixed(3), "-t", trimDuration.toFixed(3)]
+    : [];
+
+  /* Output-side -t is a second hard stop — guarantees FFmpeg won't drift
+     past the trim window due to GOP alignment or filter buffering. */
+  const outTrimArgs = isTrimmed ? ["-t", trimDuration.toFixed(3)] : [];
 
   const cmd = [
     ...seekArgs,
@@ -162,6 +168,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     "-c:a", "aac",
     "-b:a", "128k",
     "-movflags", "+faststart",
+    ...outTrimArgs,            // second -t on output side
     "-y",
     outputPath,
   ];
