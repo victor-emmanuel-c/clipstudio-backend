@@ -5,7 +5,8 @@ const multer   = require("multer");
 const cors     = require("cors");
 const path     = require("path");
 const fs       = require("fs");
-const { spawn } = require("child_process");
+const { spawn }  = require("child_process");
+const OpenAI     = require("openai");
 const { v4: uuidv4 } = require("uuid");
 
 /* ─────────────────────── Config ─────────────────────── */
@@ -80,6 +81,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     fps          = 30,
     trimStart    = 0,
     trimDuration = null,
+    assPath      = null,
   } = config;
 
   if (!VW || !VH) throw new Error("videoWidth / videoHeight are required");
@@ -138,9 +140,17 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
   /* Chain overlay filters */
   streamNames.forEach(({ name, x, y }, i) => {
     const inA  = i === 0 ? "[base]" : `[tmp${i - 1}]`;
-    const outL = i === streamNames.length - 1 ? "[out]" : `[tmp${i}]`;
+    const outL = i === streamNames.length - 1 ? "[vout]" : `[tmp${i}]`;
     filterParts.push(`${inA}[${name}]overlay=${x}:${y}${outL}`);
   });
+
+  /* Burn subtitles into the video stream when an ASS file is provided */
+  const finalStream = assPath ? "[final]" : "[vout]";
+  if (assPath) {
+    /* Escape backslashes and colons in the path for FFmpeg filter syntax */
+    const escaped = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+    filterParts.push(`[vout]ass='${escaped}'[final]`);
+  }
 
   /* Input-side seek: -ss and -t MUST come before -i for fast keyframe seek.
      Always emit -ss (even when 0) so FFmpeg knows the segment is intentional. */
@@ -157,7 +167,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     ...seekArgs,
     "-i", inputPath,
     "-filter_complex", filterParts.join(";\n"),
-    "-map", "[out]",
+    "-map", finalStream,
     "-map", "0:a?",            // keep audio if present
     "-r",  String(fps),
     "-c:v", "libx264",
@@ -237,11 +247,140 @@ function runFFmpeg(args) {
 /** Delete a file silently (ignore errors) */
 const cleanup = f => f && fs.unlink(f, () => {});
 
+/**
+ * Extract a 16 kHz mono MP3 from the video — optimal for Whisper.
+ * trimStart / trimDuration narrow the audio to only the segment being exported.
+ */
+function extractAudio(inputPath, audioPath, trimStart = 0, trimDuration = null) {
+  return new Promise((resolve, reject) => {
+    const seekArgs = [];
+    if (trimStart    >  0.01) seekArgs.push("-ss", String(trimStart));
+    if (trimDuration != null) seekArgs.push("-t",  String(trimDuration));
+
+    const ff = spawn("ffmpeg", [
+      ...seekArgs,
+      "-i",  inputPath,
+      "-vn",             // strip video
+      "-ar", "16000",    // 16 kHz — Whisper optimal
+      "-ac", "1",        // mono
+      "-f",  "mp3",
+      "-y",  audioPath,
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+
+    let errBuf = "";
+    ff.stderr.on("data", d => { errBuf += d.toString(); });
+    ff.on("error", reject);
+    ff.on("close", code =>
+      code === 0 ? resolve() : reject(new Error(`Audio extract failed (${code}): ${errBuf.slice(-200)}`))
+    );
+  });
+}
+
+/**
+ * Convert a Whisper segments array into an ASS subtitle file.
+ * timeOffset = trimStart so timestamps are relative to the clip start.
+ * PlayRes matches the quality-preset output resolution.
+ */
+function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280) {
+  const toT = sec => {
+    const t  = Math.max(0, sec - timeOffset);
+    const h  = Math.floor(t / 3600);
+    const m  = Math.floor((t % 3600) / 60);
+    const s  = Math.floor(t % 60);
+    const cs = Math.round((t % 1) * 100);
+    return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}.${String(cs).padStart(2,"0")}`;
+  };
+
+  /* Font size scales with output height — 72px at 1280px tall (720p) */
+  const fontSize = Math.round(72 * (outH / 1280));
+
+  const header = [
+    "[Script Info]",
+    "Title: ClipStudio Subtitles",
+    "ScriptType: v4.00+",
+    "WrapStyle: 0",
+    `PlayResX: ${outW}`,
+    `PlayResY: ${outH}`,
+    "ScaledBorderAndShadow: yes",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    /* PrimaryColour=white, OutlineColour=black, Bold, Alignment=2 (bottom-center), MarginV=80 */
+    `Style: Default,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,20,20,80,1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ].join("\n");
+
+  const events = segments
+    .filter(s => s.text?.trim())
+    .map(s => `Dialogue: 0,${toT(s.start)},${toT(s.end)},Default,,0,0,0,,${s.text.trim().replace(/\n/g, "\\N")}`)
+    .join("\n");
+
+  fs.writeFileSync(assPath, header + "\n" + events + "\n", "utf8");
+  console.log(`[ASS] written ${segments.length} segments → ${assPath}`);
+}
+
 /* ─────────────────────── Routes ─────────────────────── */
 
 app.get("/health", (_req, res) =>
-  res.json({ status: "ok", version: "1.0.0", ffmpeg: true })
+  res.json({ status: "ok", version: "1.1.0", ffmpeg: true, whisper: !!process.env.OPENAI_API_KEY })
 );
+
+/**
+ * POST /api/transcribe
+ * Body: multipart/form-data  { video: file, trimStart?: number, trimDuration?: number }
+ * Returns: { segments: [{ start, end, text }] }
+ */
+app.post("/api/transcribe", upload.single("video"), async (req, res) => {
+  const inputPath = req.file?.path;
+  const audioPath = path.join(UPLOADS, `${uuidv4()}.mp3`);
+
+  try {
+    if (!req.file) return res.status(400).json({ error: "No video file received" });
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({
+        error: "OPENAI_API_KEY is not set on the server. Add it in Railway → Variables.",
+      });
+    }
+
+    const trimStart    = Number(req.body.trimStart)    || 0;
+    const trimDuration = req.body.trimDuration != null ? Number(req.body.trimDuration) : null;
+
+    console.log(`[transcribe] file=${(req.file.size/1024/1024).toFixed(1)}MB trim=${trimStart}s+${trimDuration??'full'}s`);
+
+    /* ── 1. Extract audio ── */
+    await extractAudio(inputPath, audioPath, trimStart, trimDuration);
+
+    /* ── 2. Send to Whisper ── */
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const result = await openai.audio.transcriptions.create({
+      file:               fs.createReadStream(audioPath),
+      model:              "whisper-1",
+      response_format:    "verbose_json",
+      timestamp_granularities: ["segment"],
+    });
+
+    cleanup(audioPath);
+    cleanup(inputPath);
+
+    const segments = (result.segments ?? []).map(s => ({
+      start: parseFloat(s.start.toFixed(2)),
+      end:   parseFloat(s.end.toFixed(2)),
+      text:  s.text.trim(),
+    }));
+
+    console.log(`[transcribe] got ${segments.length} segments`);
+    res.json({ segments });
+
+  } catch (err) {
+    cleanup(audioPath);
+    cleanup(inputPath);
+    console.error("[transcribe] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /**
  * POST /api/export
@@ -279,14 +418,26 @@ app.post("/api/export", upload.single("video"), async (req, res) => {
     const trimStart    = Number(config.trimStart)    || 0;
     const trimDuration = config.trimDuration != null ? Number(config.trimDuration) : null;
 
+    const subtitles = Array.isArray(config.subtitles) ? config.subtitles : [];
+
     console.log(`[route] file=${(req.file.size/1024/1024).toFixed(1)}MB quality=${config.quality??'720p'} fps=${config.fps??30}`);
     console.log(`[trim] trimStart=${trimStart}s  trimDuration=${trimDuration ?? "full video"}s`);
+    console.log(`[subs] ${subtitles.length} subtitle segment(s)`);
+
+    /* ── Generate ASS subtitle file if segments are provided ── */
+    let assPath = null;
+    if (subtitles.length > 0) {
+      const q = QUALITY_PRESETS[config.quality ?? "720p"] ?? QUALITY_PRESETS["720p"];
+      assPath = path.join(OUTPUTS, `${uuidv4()}.ass`);
+      generateASS(subtitles, assPath, trimStart, q.w, q.h);
+    }
 
     /* ── Build + run FFmpeg ── */
     const ffmpegArgs = buildFFmpegArgs(inputPath, outputPath, {
       ...config,
       trimStart,
       trimDuration,
+      assPath,
     });
     await runFFmpeg(ffmpegArgs);
 
@@ -299,12 +450,13 @@ app.post("/api/export", upload.single("video"), async (req, res) => {
 
     const stream = fs.createReadStream(outputPath);
     stream.pipe(res);
-    stream.on("end",   () => { cleanup(inputPath); cleanup(outputPath); });
-    stream.on("error", () => { cleanup(inputPath); cleanup(outputPath); });
+    stream.on("end",   () => { cleanup(inputPath); cleanup(outputPath); cleanup(assPath); });
+    stream.on("error", () => { cleanup(inputPath); cleanup(outputPath); cleanup(assPath); });
 
   } catch (err) {
     cleanup(inputPath);
     cleanup(outputPath);
+    cleanup(assPath);
     console.error("Export error:", err.message);
 
     const isClientError = err.message.includes("No video") ||
