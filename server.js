@@ -166,7 +166,8 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     outputPath,
   ];
 
-  console.log(`[export] quality=${quality} fps=${fps} trim=${trimStart.toFixed(1)}s+${(trimDuration??0).toFixed(1)}s out=${OUT_W}x${OUT_H}`);
+  console.log(`[export] quality=${quality} fps=${fps} trim=${trimStart.toFixed(2)}s + ${trimDuration != null ? trimDuration.toFixed(2)+"s" : "full"} → ${OUT_W}x${OUT_H}`);
+  console.log(`[cmd]   ffmpeg ${cmd.join(" ")}`);
   return cmd;
 }
 
@@ -267,11 +268,19 @@ app.post("/api/export", upload.single("video"), async (req, res) => {
       });
     }
 
-    /* quality / fps / trim are optional — buildFFmpegArgs has safe defaults */
+    /* Explicitly extract + default trim values so nothing silently drops */
+    const trimStart    = Number(config.trimStart)    || 0;
+    const trimDuration = config.trimDuration != null ? Number(config.trimDuration) : null;
+
     console.log(`[route] file=${(req.file.size/1024/1024).toFixed(1)}MB quality=${config.quality??'720p'} fps=${config.fps??30}`);
+    console.log(`[trim] trimStart=${trimStart}s  trimDuration=${trimDuration ?? "full video"}s`);
 
     /* ── Build + run FFmpeg ── */
-    const ffmpegArgs = buildFFmpegArgs(inputPath, outputPath, config);
+    const ffmpegArgs = buildFFmpegArgs(inputPath, outputPath, {
+      ...config,
+      trimStart,
+      trimDuration,
+    });
     await runFFmpeg(ffmpegArgs);
 
     /* ── Stream output to client ── */
