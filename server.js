@@ -27,20 +27,20 @@ const QUALITY_PRESETS = {
 /* ─────────────────────── App ─────────────────────── */
 const app = express();
 
-/* CORS — allow the Vercel frontend + localhost dev */
+/* CORS — explicit allow-list */
 app.use(cors({
-  origin: (origin, cb) => {
-    const allowed = [
-      /\.vercel\.app$/,
-      /^http:\/\/localhost:\d+$/,
-      /^http:\/\/127\.0\.0\.1:\d+$/,
-    ];
-    if (!origin || allowed.some(r => r.test(origin))) return cb(null, true);
-    cb(new Error(`CORS blocked: ${origin}`));
-  },
+  origin: [
+    "https://clipstudio-topaz.vercel.app",
+    "https://clipstudio.com",
+    "http://localhost:5173",
+    "http://localhost:5174",
+  ],
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
+
+/* Handle preflight OPTIONS for all routes */
+app.options("*", cors());
 
 app.use(express.json());
 
