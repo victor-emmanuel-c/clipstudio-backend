@@ -6,7 +6,7 @@ const cors     = require("cors");
 const path     = require("path");
 const fs       = require("fs");
 const { spawn }  = require("child_process");
-const OpenAI     = require("openai");
+const Groq       = require("groq-sdk");
 const { v4: uuidv4 } = require("uuid");
 
 /* ─────────────────────── Config ─────────────────────── */
@@ -324,7 +324,7 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
 /* ─────────────────────── Routes ─────────────────────── */
 
 app.get("/health", (_req, res) =>
-  res.json({ status: "ok", version: "1.1.0", ffmpeg: true, whisper: !!process.env.OPENAI_API_KEY })
+  res.json({ status: "ok", version: "1.2.0", ffmpeg: true, whisper: !!process.env.GROQ_API_KEY })
 );
 
 /**
@@ -339,9 +339,9 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No video file received" });
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env.GROQ_API_KEY) {
       return res.status(500).json({
-        error: "OPENAI_API_KEY is not set on the server. Add it in Railway → Variables.",
+        error: "GROQ_API_KEY is not set on the server. Add it in Railway → Variables.",
       });
     }
 
@@ -354,12 +354,11 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     await extractAudio(inputPath, audioPath, trimStart, trimDuration);
 
     /* ── 2. Send to Whisper ── */
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const result = await openai.audio.transcriptions.create({
-      file:               fs.createReadStream(audioPath),
-      model:              "whisper-1",
-      response_format:    "verbose_json",
-      timestamp_granularities: ["segment"],
+    const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const result = await groq.audio.transcriptions.create({
+      file:            fs.createReadStream(audioPath),
+      model:           "whisper-large-v3",
+      response_format: "verbose_json",
     });
 
     cleanup(audioPath);
