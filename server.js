@@ -360,6 +360,10 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
       model:                   "whisper-large-v3",
       response_format:         "verbose_json",
       timestamp_granularities: ["segment", "word"],
+      /* Anti-hallucination: restrict language + give context so Whisper
+         doesn't invent words during silent/music sections */
+      language: req.body.language || "nl",
+      prompt:   "Gaming commentary, FIFA FC game footage. Exact speech only, no filler.",
     });
 
     cleanup(audioPath);
