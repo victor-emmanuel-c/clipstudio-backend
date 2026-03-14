@@ -369,24 +369,45 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     cleanup(audioPath);
     cleanup(inputPath);
 
-    /* Groq returns word timestamps at the top-level result.words (not nested per segment).
-       Fall back to filtering from there when s.words is missing. */
+    /* ── Raw response inspection ── */
+    console.log("[RAW groq]",         JSON.stringify(result).slice(0, 500));
+    console.log("[words top level]",  result.words?.slice(0, 3));
+    console.log("[segment0 words]",   result.segments?.[0]?.words?.slice(0, 3));
+
+    /* Evenly distribute word timestamps when Groq returns no word data */
+    const fakeWords = s => {
+      const tokens = s.text.trim().split(/\s+/);
+      const dur    = s.end - s.start;
+      return tokens.map((word, i) => ({
+        word,
+        start: parseFloat((s.start + (dur / tokens.length) * i      ).toFixed(3)),
+        end:   parseFloat((s.start + (dur / tokens.length) * (i + 1)).toFixed(3)),
+      }));
+    };
+
     const topLevelWords = result.words ?? [];
 
     const segments = (result.segments ?? []).map(s => {
-      const segWords = (s.words?.length > 0 ? s.words : null)
+      const raw = (s.words?.length > 0 ? s.words : null)
         ?? topLevelWords.filter(w => w.start >= s.start && w.start < s.end);
 
-      return {
+      const mapped = raw.map(w => ({
+        word:  (w.word ?? w.text ?? "").trim(),
+        start: parseFloat(w.start.toFixed(3)),
+        end:   parseFloat((w.end ?? w.start + 0.1).toFixed(3)),
+      }));
+
+      const seg = {
         start: parseFloat(s.start.toFixed(3)),
         end:   parseFloat(s.end.toFixed(3)),
         text:  s.text.trim(),
-        words: segWords.map(w => ({
-          word:  (w.word ?? w.text ?? "").trim(),
-          start: parseFloat(w.start.toFixed(3)),
-          end:   parseFloat((w.end ?? w.start + 0.1).toFixed(3)),
-        })),
+        words: mapped.length > 0 ? mapped : fakeWords({
+          text:  s.text.trim(),
+          start: parseFloat(s.start.toFixed(3)),
+          end:   parseFloat(s.end.toFixed(3)),
+        }),
       };
+      return seg;
     });
 
     console.log(`[transcribe] got ${segments.length} segments`);
