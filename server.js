@@ -356,18 +356,24 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     /* ── 2. Send to Whisper ── */
     const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const result = await groq.audio.transcriptions.create({
-      file:            fs.createReadStream(audioPath),
-      model:           "whisper-large-v3",
-      response_format: "verbose_json",
+      file:                    fs.createReadStream(audioPath),
+      model:                   "whisper-large-v3",
+      response_format:         "verbose_json",
+      timestamp_granularities: ["segment", "word"],
     });
 
     cleanup(audioPath);
     cleanup(inputPath);
 
     const segments = (result.segments ?? []).map(s => ({
-      start: parseFloat(s.start.toFixed(2)),
-      end:   parseFloat(s.end.toFixed(2)),
+      start: parseFloat(s.start.toFixed(3)),
+      end:   parseFloat(s.end.toFixed(3)),
       text:  s.text.trim(),
+      words: (s.words ?? []).map(w => ({
+        word:  w.word.trim(),
+        start: parseFloat(w.start.toFixed(3)),
+        end:   parseFloat(w.end.toFixed(3)),
+      })),
     }));
 
     console.log(`[transcribe] got ${segments.length} segments`);
