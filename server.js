@@ -5,7 +5,7 @@ const multer   = require("multer");
 const cors     = require("cors");
 const path     = require("path");
 const fs       = require("fs");
-const { execFile } = require("child_process");
+const { spawn } = require("child_process");
 const { v4: uuidv4 } = require("uuid");
 
 /* ─────────────────────── Config ─────────────────────── */
@@ -170,16 +170,57 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
   return cmd;
 }
 
-/** Run FFmpeg and return a promise; logs stderr on failure */
+/**
+ * Run FFmpeg via spawn so stderr streams live to Railway logs.
+ * Rejects if FFmpeg exits non-zero or exceeds TIMEOUT_MS.
+ */
+const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max per export
+
 function runFFmpeg(args) {
   return new Promise((resolve, reject) => {
-    console.log("FFmpeg args:", args.join(" "));
-    execFile("ffmpeg", args, { maxBuffer: 200 * 1024 * 1024 }, (err, _stdout, stderr) => {
-      if (err) {
-        console.error("FFmpeg stderr (last 2 KB):\n", stderr.slice(-2048));
-        reject(new Error(`FFmpeg failed: ${stderr.slice(-400)}`));
-      } else {
+    /* ── Full command log — visible immediately in Railway logs ── */
+    console.log("\n[FFmpeg] Starting process");
+    console.log("[FFmpeg] cmd: ffmpeg", args.join(" "), "\n");
+
+    /* Ensure output directory exists right before we need it */
+    fs.mkdirSync(OUTPUTS, { recursive: true });
+
+    const ff = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+
+    let stderrBuf = "";
+
+    /* Stream stderr live — shows codec init, frame progress, errors */
+    ff.stderr.on("data", chunk => {
+      const txt = chunk.toString();
+      stderrBuf += txt;
+      /* Only print lines that carry useful info; skip blank lines */
+      txt.split("\n").forEach(line => {
+        if (line.trim()) console.log("[FFmpeg]", line);
+      });
+    });
+
+    /* Hard timeout — kills FFmpeg if it stalls completely */
+    const timer = setTimeout(() => {
+      console.error("[FFmpeg] TIMEOUT — killing process");
+      ff.kill("SIGKILL");
+      reject(new Error("FFmpeg timed out after 10 minutes"));
+    }, TIMEOUT_MS);
+
+    ff.on("error", err => {
+      clearTimeout(timer);
+      console.error("[FFmpeg] spawn error:", err.message);
+      reject(new Error(`FFmpeg spawn failed: ${err.message}`));
+    });
+
+    ff.on("close", code => {
+      clearTimeout(timer);
+      if (code === 0) {
+        console.log("[FFmpeg] Finished successfully");
         resolve();
+      } else {
+        const tail = stderrBuf.slice(-800);
+        console.error(`[FFmpeg] Exited with code ${code}\n${tail}`);
+        reject(new Error(`FFmpeg exited ${code}: ${tail.slice(-300)}`));
       }
     });
   });
