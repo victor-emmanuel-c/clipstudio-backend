@@ -369,18 +369,28 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     cleanup(audioPath);
     cleanup(inputPath);
 
-    const segments = (result.segments ?? []).map(s => ({
-      start: parseFloat(s.start.toFixed(3)),
-      end:   parseFloat(s.end.toFixed(3)),
-      text:  s.text.trim(),
-      words: (s.words ?? []).map(w => ({
-        word:  w.word.trim(),
-        start: parseFloat(w.start.toFixed(3)),
-        end:   parseFloat(w.end.toFixed(3)),
-      })),
-    }));
+    /* Groq returns word timestamps at the top-level result.words (not nested per segment).
+       Fall back to filtering from there when s.words is missing. */
+    const topLevelWords = result.words ?? [];
+
+    const segments = (result.segments ?? []).map(s => {
+      const segWords = (s.words?.length > 0 ? s.words : null)
+        ?? topLevelWords.filter(w => w.start >= s.start && w.start < s.end);
+
+      return {
+        start: parseFloat(s.start.toFixed(3)),
+        end:   parseFloat(s.end.toFixed(3)),
+        text:  s.text.trim(),
+        words: segWords.map(w => ({
+          word:  (w.word ?? w.text ?? "").trim(),
+          start: parseFloat(w.start.toFixed(3)),
+          end:   parseFloat((w.end ?? w.start + 0.1).toFixed(3)),
+        })),
+      };
+    });
 
     console.log(`[transcribe] got ${segments.length} segments`);
+    console.log("[words sample]", segments[0]?.words?.slice(0, 3));
     res.json({ segments });
 
   } catch (err) {
