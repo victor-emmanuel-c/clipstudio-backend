@@ -354,17 +354,20 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     await extractAudio(inputPath, audioPath, trimStart, trimDuration);
 
     /* ── 2. Send to Whisper ── */
-    const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY });
-    const result = await groq.audio.transcriptions.create({
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const transcribeParams = {
       file:                    fs.createReadStream(audioPath),
       model:                   "whisper-large-v3",
       response_format:         "verbose_json",
       timestamp_granularities: ["segment", "word"],
-      /* Anti-hallucination: restrict language + give context so Whisper
-         doesn't invent words during silent/music sections */
-      language: req.body.language || "nl",
-      prompt:   "Gaming commentary, FIFA FC game footage. Exact speech only, no filler.",
-    });
+      prompt:                  "Gaming commentary, FIFA FC game footage. Exact speech only, no filler.",
+    };
+    /* Only set language when the client provides one — omitting it enables auto-detect */
+    const lang = (req.body.language || "").trim();
+    if (lang) transcribeParams.language = lang;
+    console.log(`[transcribe] language=${lang || "auto"}`);
+
+    const result = await groq.audio.transcriptions.create(transcribeParams);
 
     cleanup(audioPath);
     cleanup(inputPath);
