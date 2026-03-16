@@ -277,8 +277,13 @@ function extractAudio(inputPath, audioPath, trimStart = 0, trimDuration = null) 
 }
 
 /**
- * Convert a Whisper segments array into an ASS subtitle file.
- * timeOffset = trimStart so timestamps are relative to the clip start.
+ * Convert a Whisper segments array into a karaoke-style ASS subtitle file.
+ *
+ * Each word is preceded by a \k<centiseconds> tag so ASS karaoke timing
+ * highlights the current word in SecondaryColour (yellow) while future
+ * words remain PrimaryColour (white).
+ *
+ * timeOffset = trimStart — makes timestamps relative to the output clip start.
  * PlayRes matches the quality-preset output resolution.
  */
 function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280) {
@@ -291,8 +296,9 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
     return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}.${String(cs).padStart(2,"0")}`;
   };
 
-  /* Font size scales with output height — 72px at 1280px tall (720p) */
-  const fontSize = Math.round(72 * (outH / 1280));
+  /* Font size scales with output height — 80px at 1920px (1080p) */
+  const fontSize = Math.round(80 * (outH / 1920));
+  const marginV  = Math.round(120 * (outH / 1920));
 
   const header = [
     "[Script Info]",
@@ -304,9 +310,10 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
     "ScaledBorderAndShadow: yes",
     "",
     "[V4+ Styles]",
-    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    /* PrimaryColour=white, OutlineColour=black, Bold, Alignment=2 (bottom-center), MarginV=80 */
-    `Style: Default,Arial,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,20,20,80,1`,
+    "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+    /* PrimaryColour=white, SecondaryColour=yellow, OutlineColour=black, BackColour=semi-transparent black
+       Bold=-1 (true), Alignment=2 (bottom-center), BorderStyle=1, Outline=4, Shadow=2                 */
+    `Style: Default,Impact,${fontSize},&H00FFFFFF,&H00FFFF00,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,20,20,${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -314,11 +321,31 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
 
   const events = segments
     .filter(s => s.text?.trim())
-    .map(s => `Dialogue: 0,${toT(s.start)},${toT(s.end)},Default,,0,0,0,,${s.text.trim().replace(/\n/g, "\\N")}`)
+    .map(s => {
+      const words = s.words?.length > 0 ? s.words : null;
+
+      if (!words) {
+        /* No word timestamps — emit plain text without karaoke */
+        return `Dialogue: 0,${toT(s.start)},${toT(s.end)},Default,,0,0,0,,${s.text.trim().replace(/\n/g, "\\N")}`;
+      }
+
+      /* Build karaoke text: {\k<cs>}word for each word.
+         Each \k value is the centiseconds from this word's start to the next
+         word's start (or to the segment end for the last word).
+         The \k tag makes ASS highlight the word in SecondaryColour (yellow)
+         during its karaoke window — all other words remain PrimaryColour (white). */
+      const karaokeText = words.map((w, i) => {
+        const nextStart = i < words.length - 1 ? words[i + 1].start : s.end;
+        const durCs     = Math.max(1, Math.round((nextStart - w.start) * 100));
+        return `{\\k${durCs}}${w.word}`;
+      }).join(" ");
+
+      return `Dialogue: 0,${toT(s.start)},${toT(s.end)},Default,,0,0,0,,${karaokeText}`;
+    })
     .join("\n");
 
   fs.writeFileSync(assPath, header + "\n" + events + "\n", "utf8");
-  console.log(`[ASS] written ${segments.length} segments → ${assPath}`);
+  console.log(`[ASS] karaoke file written — ${segments.length} segments → ${assPath}`);
 }
 
 /* ─────────────────────── Routes ─────────────────────── */
