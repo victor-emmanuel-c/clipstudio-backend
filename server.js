@@ -367,7 +367,14 @@ app.post("/api/transcribe", upload.single("video"), async (req, res) => {
     if (lang) transcribeParams.language = lang;
     console.log(`[transcribe] language=${lang || "auto"}`);
 
-    const result = await groq.audio.transcriptions.create(transcribeParams);
+    /* 5-minute hard timeout — prevents Railway worker from hanging indefinitely */
+    const transcribeTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Transcription timed out after 5 minutes")), 5 * 60 * 1000)
+    );
+    const result = await Promise.race([
+      groq.audio.transcriptions.create(transcribeParams),
+      transcribeTimeout,
+    ]);
 
     cleanup(audioPath);
     cleanup(inputPath);
