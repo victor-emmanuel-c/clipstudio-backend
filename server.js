@@ -3,6 +3,7 @@
 const express  = require("express");
 const multer   = require("multer");
 const cors     = require("cors");
+const axios    = require("axios");
 const path     = require("path");
 const fs       = require("fs");
 const { spawn }  = require("child_process");
@@ -595,6 +596,203 @@ app.use((err, _req, res, _next) => {
     return res.status(413).json({ error: `File too large (max ${MAX_MB} MB)` });
   }
   res.status(500).json({ error: err.message || "Unexpected server error" });
+});
+
+// ============================================================
+// TWITCH CLIPS BROWSER — ADDED TO BACKEND
+// ============================================================
+
+// Store token in memory (refreshes automatically)
+let twitchToken = null;
+let twitchTokenExpiry = null;
+
+// Get Twitch app access token
+async function getTwitchToken() {
+  // Return cached token if still valid
+  if (twitchToken && twitchTokenExpiry && Date.now() < twitchTokenExpiry) {
+    return twitchToken;
+  }
+
+  const response = await axios.post("https://id.twitch.tv/oauth2/token", null, {
+    params: {
+      client_id: process.env.TWITCH_CLIENT_ID,
+      client_secret: process.env.TWITCH_CLIENT_SECRET,
+      grant_type: "client_credentials",
+    },
+  });
+
+  twitchToken = response.data.access_token;
+  // Expire 1 hour before actual expiry to be safe
+  twitchTokenExpiry = Date.now() + (response.data.expires_in - 3600) * 1000;
+  return twitchToken;
+}
+
+// ============================================================
+// ENDPOINT 1: Get top clips by game/category
+// GET /twitch-clips?game=Fortnite&period=24h&limit=12
+// ============================================================
+app.get("/twitch-clips", async (req, res) => {
+  try {
+    const { game, streamer, limit = 12 } = req.query;
+
+    const token = await getTwitchToken();
+    const headers = {
+      "Client-ID": process.env.TWITCH_CLIENT_ID,
+      Authorization: `Bearer ${token}`,
+    };
+
+    // Calculate 24 hours ago
+    const startedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    let clips = [];
+
+    if (streamer) {
+      // Get broadcaster ID first
+      const userRes = await axios.get("https://api.twitch.tv/helix/users", {
+        headers,
+        params: { login: streamer.toLowerCase() },
+      });
+
+      if (!userRes.data.data.length) {
+        return res.status(404).json({ error: "Streamer not found" });
+      }
+
+      const broadcasterId = userRes.data.data[0].id;
+
+      const clipsRes = await axios.get("https://api.twitch.tv/helix/clips", {
+        headers,
+        params: {
+          broadcaster_id: broadcasterId,
+          first: limit,
+          started_at: startedAt,
+        },
+      });
+      clips = clipsRes.data.data;
+    } else if (game) {
+      // Get game ID first
+      const gameRes = await axios.get("https://api.twitch.tv/helix/games", {
+        headers,
+        params: { name: game },
+      });
+
+      if (!gameRes.data.data.length) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+
+      const gameId = gameRes.data.data[0].id;
+
+      const clipsRes = await axios.get("https://api.twitch.tv/helix/clips", {
+        headers,
+        params: {
+          game_id: gameId,
+          first: limit,
+          started_at: startedAt,
+        },
+      });
+      clips = clipsRes.data.data;
+    } else {
+      // No filter — return top clips overall (last 24h)
+      // Twitch doesn't support this directly, so use trending clips endpoint window
+      const clipsRes = await axios.get("https://api.twitch.tv/helix/clips", {
+        headers,
+        params: {
+          first: limit,
+          started_at: startedAt,
+        },
+      });
+      clips = clipsRes.data.data;
+    }
+
+    // Format response
+    const formatted = clips.map((clip) => ({
+      id: clip.id,
+      title: clip.title,
+      broadcaster_name: clip.broadcaster_name,
+      game_id: clip.game_id,
+      view_count: clip.view_count,
+      duration: clip.duration,
+      thumbnail_url: clip.thumbnail_url,
+      // Convert thumbnail URL to video URL
+      // Twitch thumbnail: https://clips-media-assets2.twitch.tv/XXXXX-preview-480x272.jpg
+      // Twitch video:     https://clips-media-assets2.twitch.tv/XXXXX.mp4
+      video_url: clip.thumbnail_url
+        .replace("-preview-480x272.jpg", ".mp4")
+        .replace("-preview-480x272", ".mp4"),
+      clip_url: clip.url,
+      created_at: clip.created_at,
+    }));
+
+    res.json({ clips: formatted });
+  } catch (error) {
+    console.error("Twitch clips error:", error.message);
+    res.status(500).json({ error: "Failed to fetch Twitch clips" });
+  }
+});
+
+// ============================================================
+// ENDPOINT 2: Search games/categories
+// GET /twitch-games?query=fortnite
+// ============================================================
+app.get("/twitch-games", async (req, res) => {
+  try {
+    const { query } = req.query;
+    if (!query) return res.json({ games: [] });
+
+    const token = await getTwitchToken();
+
+    const response = await axios.get("https://api.twitch.tv/helix/search/categories", {
+      headers: {
+        "Client-ID": process.env.TWITCH_CLIENT_ID,
+        Authorization: `Bearer ${token}`,
+      },
+      params: { query, first: 8 },
+    });
+
+    const games = response.data.data.map((g) => ({
+      id: g.id,
+      name: g.name,
+      box_art_url: g.box_art_url
+        .replace("{width}", "52")
+        .replace("{height}", "72"),
+    }));
+
+    res.json({ games });
+  } catch (error) {
+    console.error("Twitch games error:", error.message);
+    res.status(500).json({ error: "Failed to search games" });
+  }
+});
+
+// ============================================================
+// ENDPOINT 3: Download a Twitch clip as MP4
+// POST /download-clip  { video_url: "https://..." }
+// ============================================================
+app.post("/download-clip", async (req, res) => {
+  try {
+    const { video_url } = req.body;
+
+    if (!video_url) {
+      return res.status(400).json({ error: "No video URL provided" });
+    }
+
+    // Download the clip from Twitch CDN
+    const response = await axios.get(video_url, {
+      responseType: "stream",
+      timeout: 30000,
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", 'attachment; filename="clip.mp4"');
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    response.data.pipe(res);
+  } catch (error) {
+    console.error("Download clip error:", error.message);
+    res.status(500).json({ error: "Failed to download clip" });
+  }
 });
 
 /* ─────────────────────── Start ─────────────────────── */
