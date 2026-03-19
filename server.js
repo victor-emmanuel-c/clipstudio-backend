@@ -11,18 +11,21 @@ const Groq       = require("groq-sdk");
 const { v4: uuidv4 } = require("uuid");
 const YTDlpWrap = require("yt-dlp-wrap").default;
 
+const YTDLP_BINARY_PATH = "/tmp/yt-dlp";
+
 // Auto-download yt-dlp binary on startup
 async function initYtDlp() {
   try {
-    await YTDlpWrap.downloadFromGithub();
+    await YTDlpWrap.downloadFromGithub(YTDLP_BINARY_PATH);
     console.log("[yt-dlp] Binary ready");
+    return true;
   } catch (e) {
     console.error("[yt-dlp] Failed to download binary:", e.message);
+    return false;
   }
 }
-initYtDlp();
-
-const ytDlpWrap = new YTDlpWrap();
+let ytDlpReady = initYtDlp();
+const ytDlpWrap = new YTDlpWrap(YTDLP_BINARY_PATH);
 
 /* ─────────────────────── Config ─────────────────────── */
 const PORT       = process.env.PORT || 3001;
@@ -386,6 +389,17 @@ app.post("/download-url", async (req, res) => {
   const outputPath = `/tmp/dl_${Date.now()}.mp4`;
 
   try {
+    const ready = await ytDlpReady;
+    if (!ready) {
+      ytDlpReady = initYtDlp();
+      const retryReady = await ytDlpReady;
+      if (!retryReady) {
+        return res.status(500).json({
+          error: "Could not initialize downloader on server. Try again in a moment.",
+        });
+      }
+    }
+
     console.log(`[download-url] start ${url}`);
     await ytDlpWrap.execPromise([
       url,
