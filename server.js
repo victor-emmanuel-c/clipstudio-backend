@@ -11,6 +11,19 @@ const Groq       = require("groq-sdk");
 const { v4: uuidv4 } = require("uuid");
 const YTDlpWrap = require("yt-dlp-wrap").default;
 
+// Auto-download yt-dlp binary on startup
+async function initYtDlp() {
+  try {
+    await YTDlpWrap.downloadFromGithub();
+    console.log("[yt-dlp] Binary ready");
+  } catch (e) {
+    console.error("[yt-dlp] Failed to download binary:", e.message);
+  }
+}
+initYtDlp();
+
+const ytDlpWrap = new YTDlpWrap();
+
 /* ─────────────────────── Config ─────────────────────── */
 const PORT       = process.env.PORT || 3001;
 const UPLOADS    = "/tmp/cs-uploads";
@@ -248,7 +261,6 @@ function runFFmpeg(args) {
 
 /** Delete a file silently (ignore errors) */
 const cleanup = f => f && fs.unlink(f, () => {});
-const ytDlpWrap = new YTDlpWrap(process.env.YTDLP_BINARY_PATH || undefined);
 
 /**
  * Extract a 16 kHz mono MP3 from the video — optimal for Whisper.
@@ -365,23 +377,23 @@ app.get("/health", (_req, res) =>
 app.post("/download-url", async (req, res) => {
   const url = (req.body?.url || "").trim();
   if (!url) {
-    return res.status(400).json({ error: "No URL provided" });
+    return res.status(400).json({ error: "No URL" });
   }
   if (!/^https?:\/\//i.test(url)) {
     return res.status(400).json({ error: "Invalid URL format" });
   }
 
-  const outputPath = path.join(UPLOADS, `download_${Date.now()}_${uuidv4()}.mp4`);
+  const outputPath = `/tmp/dl_${Date.now()}.mp4`;
 
   try {
     console.log(`[download-url] start ${url}`);
     await ytDlpWrap.execPromise([
       url,
       "-o", outputPath,
-      "--format", "best[ext=mp4][height<=1080]/best[height<=1080]/best",
-      "--merge-output-format", "mp4",
+      "--format", "best[ext=mp4][height<=1080]/best[ext=mp4]/best",
       "--no-playlist",
       "--max-filesize", "500m",
+      "--no-warnings",
     ]);
 
     if (!fs.existsSync(outputPath)) {
@@ -393,10 +405,10 @@ app.post("/download-url", async (req, res) => {
       if (err) console.error("[download-url] stream error:", err.message);
     });
   } catch (error) {
-    console.error("[download-url] error:", error.message || error);
+    console.error("[yt-dlp error]", error.message || error);
     cleanup(outputPath);
     res.status(500).json({
-      error: "This video is private or not available",
+      error: "Could not download video. Make sure the URL is public and correct.",
     });
   }
 });
