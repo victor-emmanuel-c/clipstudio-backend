@@ -8,6 +8,7 @@ const fs       = require("fs");
 const { spawn }  = require("child_process");
 const Groq       = require("groq-sdk");
 const { v4: uuidv4 } = require("uuid");
+const YTDlpWrap = require("yt-dlp-wrap").default;
 
 /* ─────────────────────── Config ─────────────────────── */
 const PORT       = process.env.PORT || 3001;
@@ -246,6 +247,7 @@ function runFFmpeg(args) {
 
 /** Delete a file silently (ignore errors) */
 const cleanup = f => f && fs.unlink(f, () => {});
+const ytDlpWrap = new YTDlpWrap(process.env.YTDLP_BINARY_PATH || undefined);
 
 /**
  * Extract a 16 kHz mono MP3 from the video — optimal for Whisper.
@@ -353,6 +355,50 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
 app.get("/health", (_req, res) =>
   res.json({ status: "ok", version: "1.2.0", ffmpeg: true, whisper: !!process.env.GROQ_API_KEY })
 );
+
+/**
+ * POST /download-url
+ * Body: { url: "https://..." }
+ * Downloads a public video URL using yt-dlp and streams it as clip.mp4.
+ */
+app.post("/download-url", async (req, res) => {
+  const url = (req.body?.url || "").trim();
+  if (!url) {
+    return res.status(400).json({ error: "No URL provided" });
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    return res.status(400).json({ error: "Invalid URL format" });
+  }
+
+  const outputPath = path.join(UPLOADS, `download_${Date.now()}_${uuidv4()}.mp4`);
+
+  try {
+    console.log(`[download-url] start ${url}`);
+    await ytDlpWrap.execPromise([
+      url,
+      "-o", outputPath,
+      "--format", "best[ext=mp4][height<=1080]/best[height<=1080]/best",
+      "--merge-output-format", "mp4",
+      "--no-playlist",
+      "--max-filesize", "500m",
+    ]);
+
+    if (!fs.existsSync(outputPath)) {
+      return res.status(500).json({ error: "Could not download video. Make sure the URL is public." });
+    }
+
+    res.download(outputPath, "clip.mp4", (err) => {
+      cleanup(outputPath);
+      if (err) console.error("[download-url] stream error:", err.message);
+    });
+  } catch (error) {
+    console.error("[download-url] error:", error.message || error);
+    cleanup(outputPath);
+    res.status(500).json({
+      error: "This video is private or not available",
+    });
+  }
+});
 
 /**
  * POST /api/transcribe
