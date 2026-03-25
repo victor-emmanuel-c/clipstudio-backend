@@ -639,13 +639,19 @@ async function getTwitchToken() {
     return twitchToken;
   }
 
-  const response = await axios.post("https://id.twitch.tv/oauth2/token", null, {
-    params: {
+  const response = await axios.post(
+    'https://id.twitch.tv/oauth2/token',
+    new URLSearchParams({
       client_id: process.env.TWITCH_CLIENT_ID,
       client_secret: process.env.TWITCH_CLIENT_SECRET,
-      grant_type: "client_credentials",
-    },
-  });
+      grant_type: 'client_credentials'
+    }).toString(),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
+  );
 
   twitchToken = response.data.access_token;
   // Expire 1 hour before actual expiry to be safe
