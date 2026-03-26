@@ -17,7 +17,7 @@ const YTDLP_BINARY_PATH = "/tmp/yt-dlp";
 async function initYtDlp() {
   try {
     await YTDlpWrap.downloadFromGithub(YTDLP_BINARY_PATH);
-    console.log("[yt-dlp] Binary ready");
+    console.log("[yt-dlp] Binary ready - v2");
     return true;
   } catch (e) {
     console.error("[yt-dlp] Failed to download binary:", e.message);
