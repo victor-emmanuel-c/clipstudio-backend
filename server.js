@@ -629,29 +629,33 @@ let twitchTokenExpiry = null;
 
 // Get Twitch app access token
 async function getTwitchToken() {
-  // Return cached token if still valid
   if (twitchToken && twitchTokenExpiry && Date.now() < twitchTokenExpiry) {
     return twitchToken;
   }
-
-  const response = await axios.post(
-    'https://id.twitch.tv/oauth2/token',
-    new URLSearchParams({
-      client_id: process.env.TWITCH_CLIENT_ID,
-      client_secret: process.env.TWITCH_CLIENT_SECRET,
-      grant_type: 'client_credentials'
-    }).toString(),
-    {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+  try {
+    const response = await axios.post(
+      'https://id.twitch.tv/oauth2/token',
+      new URLSearchParams({
+        client_id: process.env.TWITCH_CLIENT_ID,
+        client_secret: process.env.TWITCH_CLIENT_SECRET,
+        grant_type: 'client_credentials'
+      }).toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
       }
-    }
-  );
-
-  twitchToken = response.data.access_token;
-  // Expire 1 hour before actual expiry to be safe
-  twitchTokenExpiry = Date.now() + (response.data.expires_in - 3600) * 1000;
-  return twitchToken;
+    );
+    twitchToken = response.data.access_token;
+    twitchTokenExpiry = Date.now() + (response.data.expires_in - 3600) * 1000;
+    return twitchToken;
+  } catch (err) {
+    console.error('[Twitch token error] Status:', err.response?.status);
+    console.error('[Twitch token error] Data:', JSON.stringify(err.response?.data));
+    console.error('[Twitch token error] CLIENT_ID present:', !!process.env.TWITCH_CLIENT_ID);
+    console.error('[Twitch token error] SECRET present:', !!process.env.TWITCH_CLIENT_SECRET);
+    throw err;
+  }
 }
 
 // ============================================================
