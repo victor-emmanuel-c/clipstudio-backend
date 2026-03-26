@@ -46,20 +46,14 @@ const QUALITY_PRESETS = {
 /* ─────────────────────── App ─────────────────────── */
 const app = express();
 
-/* CORS — explicit allow-list */
 app.use(cors({
-  origin: [
-    "https://clipstudio-topaz.vercel.app",
-    "https://clipstudio.com",
-    "http://localhost:5173",
-    "http://localhost:5174",
-  ],
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"],
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 /* Handle preflight OPTIONS for all routes */
-app.options("*", cors());
+app.options('*', cors());
 
 app.use(express.json());
 
