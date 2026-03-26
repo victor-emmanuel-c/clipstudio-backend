@@ -24,8 +24,9 @@ async function initYtDlp() {
     return false;
   }
 }
-let ytDlpReady = initYtDlp();
+let ytDlpReady = false;
 const ytDlpWrap = new YTDlpWrap(YTDLP_BINARY_PATH);
+initYtDlp().then(result => { ytDlpReady = result; });
 
 /* ─────────────────────── Config ─────────────────────── */
 const PORT       = process.env.PORT || 3001;
