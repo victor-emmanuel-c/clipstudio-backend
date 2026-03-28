@@ -185,9 +185,8 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
       .replace(/:/g, "\\:")
       .replace(/\n/g, " ");
 
-    /* Color: strip # and convert to hex for drawtext */
-    const colorHex = (layer.color || "#ffffff").replace("#", "");
-    const fontColor = colorHex.length === 6 ? `0x${colorHex}` : "0xffffff";
+    const color = (layer.color || "#ffffff").replace("#", "");
+    const ffColor = `0x${color}`;
 
     /* Time filter: only show during startTime-endTime */
     const startT = layer.startTime ?? 0;
@@ -197,14 +196,13 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     filterParts.push(
       `${currentStream}drawtext=` +
       `text='${safeText}':` +
-      `fontcolor=${fontColor}:` +
+      `fontcolor=${ffColor}:` +
       `fontsize=${fontSize}:` +
-      `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:` +
       `x=${tx}+(${tw}-text_w)/2:` +
       `y=${ty}+(${th}-text_h)/2:` +
       `borderw=3:bordercolor=0x000000:` +
       `${timeFilter}` +
-      outStream
+      `${outStream}`
     );
     currentStream = outStream;
   });
