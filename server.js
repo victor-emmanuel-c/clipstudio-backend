@@ -165,49 +165,83 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
   let currentStream = "[vout]";
 
   textLayers.forEach((layer, idx) => {
-    const outStream = (assPath || idx < textLayers.length - 1)
-      ? `[txt${idx}]`
-      : "[final]";
+    const isLast = !assPath && idx === textLayers.length - 1;
+    const outStream = isLast ? "[final]" : `[txt${idx}]`;
 
-    /* Position in output pixels */
     const tx = Math.round(layer.x / 100 * OUT_W);
     const ty = Math.round(layer.y / 100 * OUT_H);
     const tw = Math.round(layer.w / 100 * OUT_W);
     const th = Math.round(layer.h / 100 * OUT_H);
 
-    /* Font size based on layer height */
-    const fontSize = Math.max(16, Math.round(th * 0.45));
+    const fontSize = Math.min(
+      Math.round(th * 0.45),
+      layer.fontSize ? Math.round(layer.fontSize * OUT_H / 1920) : 999
+    );
+    const fs = Math.max(16, fontSize);
 
-    const fontFile = layer.fontName === "Bangers"
-      ? ""
-      : layer.fontName === "Inter"
-        ? "fontfile=/usr/share/fonts/truetype/open-sans/OpenSans-Bold.ttf:"
-        : "fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:";
-
-    /* Escape text for ffmpeg */
     const safeText = (layer.text || "")
       .replace(/\\/g, "\\\\")
       .replace(/'/g, "\u2019")
       .replace(/:/g, "\\:")
+      .replace(/\[/g, "\\[")
+      .replace(/\]/g, "\\]")
       .replace(/\n/g, " ");
 
     const color = (layer.color || "#ffffff").replace("#", "");
     const ffColor = `0x${color}`;
 
-    /* Time filter: only show during startTime-endTime */
     const startT = layer.startTime ?? 0;
     const endT   = layer.endTime   ?? 999999;
     const timeFilter = `enable='between(t\\,${startT}\\,${endT})'`;
 
+    const textStyle = layer.textStyle || "outline";
+    const bgColor   = (layer.bgColor || "#000000").replace("#", "");
+
+    /* Build font option */
+    let fontOpt = "";
+    if (layer.fontName === "Inter") {
+      fontOpt = "fontfile=/usr/share/fonts/truetype/open-sans/OpenSans-Bold.ttf:";
+    } else if (layer.fontName !== "Bangers") {
+      fontOpt = "fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:";
+    }
+
+    /* Build border/box options based on textStyle */
+    let styleOpts = "";
+    if (textStyle === "outline" || textStyle === "none") {
+      styleOpts = textStyle === "outline"
+        ? `borderw=4:bordercolor=0x000000:`
+        : "";
+    } else if (textStyle === "box" || textStyle === "pill") {
+      /* Use drawbox first, then drawtext on top */
+      const boxAlpha = "aa"; // 67% opacity
+      const pad = Math.round(fs * 0.3);
+      const bx = tx - pad;
+      const by = ty - pad;
+      const bw = tw + pad * 2;
+      const bh = th + pad * 2;
+
+      /* Draw background box first */
+      filterParts.push(
+        `${currentStream}drawbox=` +
+        `x=${bx}:y=${by}:w=${bw}:h=${bh}:` +
+        `color=0x${bgColor}${boxAlpha}:` +
+        `t=fill:` +
+        `${timeFilter}` +
+        `[box${idx}]`
+      );
+      currentStream = `[box${idx}]`;
+      styleOpts = `borderw=0:`;
+    }
+
     filterParts.push(
       `${currentStream}drawtext=` +
-      `${fontFile}` +
+      `${fontOpt}` +
       `text='${safeText}':` +
       `fontcolor=${ffColor}:` +
-      `fontsize=${fontSize}:` +
+      `fontsize=${fs}:` +
       `x=${tx}+(${tw}-text_w)/2:` +
       `y=${ty}+(${th}-text_h)/2:` +
-      `borderw=3:bordercolor=0x000000:` +
+      `${styleOpts}` +
       `${timeFilter}` +
       `${outStream}`
     );
