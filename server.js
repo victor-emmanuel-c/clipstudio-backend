@@ -173,11 +173,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     const tw = Math.round(layer.w / 100 * OUT_W);
     const th = Math.round(layer.h / 100 * OUT_H);
 
-    /* layer.fontSize is in px at 1920px export height.
-       Scale directly to current output resolution. */
-    const fs = layer.fontSize
-      ? Math.max(16, Math.round(layer.fontSize * OUT_H / 1920))
-      : Math.max(16, Math.round(th * 0.45));
+    const fs = Math.max(16, Math.round((layer.fontSize || 40) * OUT_H / 1920));
 
     const safeText = (layer.text || "")
       .replace(/\\/g, "\\\\")
@@ -185,7 +181,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
       .replace(/:/g, "\\:")
       .replace(/\[/g, "\\[")
       .replace(/\]/g, "\\]")
-      .replace(/\n/g, " ");
+      .replace(/\n/g, "\\n");
 
     const color = (layer.color || "#ffffff").replace("#", "");
     const ffColor = `0x${color}`;
