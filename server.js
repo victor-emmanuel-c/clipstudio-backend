@@ -173,11 +173,11 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     const tw = Math.round(layer.w / 100 * OUT_W);
     const th = Math.round(layer.h / 100 * OUT_H);
 
-    const fontSize = Math.min(
-      Math.round(th * 0.45),
-      layer.fontSize ? Math.round(layer.fontSize * OUT_H / 1920) : 999
-    );
-    const fs = Math.max(16, fontSize);
+    /* layer.fontSize is in px at 1920px export height.
+       Scale directly to current output resolution. */
+    const fs = layer.fontSize
+      ? Math.max(16, Math.round(layer.fontSize * OUT_H / 1920))
+      : Math.max(16, Math.round(th * 0.45));
 
     const safeText = (layer.text || "")
       .replace(/\\/g, "\\\\")
