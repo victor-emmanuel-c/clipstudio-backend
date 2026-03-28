@@ -157,13 +157,67 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     filterParts.push(`${inA}[${name}]overlay=${x}:${y}${outL}`);
   });
 
-  /* Burn subtitles into the video stream when an ASS file is provided */
-  const finalStream = assPath ? "[final]" : "[vout]";
+  /* Text layers — drawtext filter for each */
+  const textLayers = [...layers]
+    .filter(l => l.type === "text" && l.text)
+    .sort((a, b) => (a.z ?? 1) - (b.z ?? 1));
+
+  let currentStream = "[vout]";
+
+  textLayers.forEach((layer, idx) => {
+    const outStream = (assPath || idx < textLayers.length - 1)
+      ? `[txt${idx}]`
+      : "[final]";
+
+    /* Position in output pixels */
+    const tx = Math.round(layer.x / 100 * OUT_W);
+    const ty = Math.round(layer.y / 100 * OUT_H);
+    const tw = Math.round(layer.w / 100 * OUT_W);
+    const th = Math.round(layer.h / 100 * OUT_H);
+
+    /* Font size based on layer height */
+    const fontSize = Math.max(16, Math.round(th * 0.45));
+
+    /* Escape text for ffmpeg */
+    const safeText = (layer.text || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\u2019")
+      .replace(/:/g, "\\:")
+      .replace(/\n/g, " ");
+
+    /* Color: strip # and convert to hex for drawtext */
+    const colorHex = (layer.color || "#ffffff").replace("#", "");
+    const fontColor = colorHex.length === 6 ? `0x${colorHex}` : "0xffffff";
+
+    /* Time filter: only show during startTime-endTime */
+    const startT = layer.startTime ?? 0;
+    const endT   = layer.endTime   ?? 999999;
+    const timeFilter = `enable='between(t\\,${startT}\\,${endT})'`;
+
+    filterParts.push(
+      `${currentStream}drawtext=` +
+      `text='${safeText}':` +
+      `fontcolor=${fontColor}:` +
+      `fontsize=${fontSize}:` +
+      `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:` +
+      `x=${tx}+(${tw}-text_w)/2:` +
+      `y=${ty}+(${th}-text_h)/2:` +
+      `borderw=3:bordercolor=0x000000:` +
+      `${timeFilter}` +
+      outStream
+    );
+    currentStream = outStream;
+  });
+
+  /* ASS subtitles on top of everything */
   if (assPath) {
-    /* Escape backslashes and colons in the path for FFmpeg filter syntax */
     const escaped = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-    filterParts.push(`[vout]ass='${escaped}'[final]`);
+    filterParts.push(`${currentStream}ass='${escaped}'[final]`);
   }
+
+  /* Last video pad: [vout] if no text and no ASS; else drawtext/ass always end at [final] */
+  const finalStream =
+    assPath || textLayers.length > 0 ? "[final]" : "[vout]";
 
   /* Input-side seek: -ss and -t MUST come before -i for fast keyframe seek.
      Always emit -ss (even when 0) so FFmpeg knows the segment is intentional. */
