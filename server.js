@@ -378,7 +378,7 @@ function generateASS(segments, assPath, timeOffset = 0, outW = 720, outH = 1280)
     "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
     /* PrimaryColour=white, SecondaryColour=yellow, OutlineColour=black, BackColour=semi-transparent black
        Bold=-1 (true), Alignment=2 (bottom-center), BorderStyle=1, Outline=4, Shadow=2                 */
-    `Style: Default,Impact,${fontSize},&H00FFFFFF,&H00FFFF00,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,20,20,${marginV},1`,
+    `Style: Default,Arial,${fontSize},&H00FFFFFF,&H00FFFF00,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,20,20,${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
