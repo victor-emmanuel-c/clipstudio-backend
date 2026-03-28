@@ -178,6 +178,12 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
     /* Font size based on layer height */
     const fontSize = Math.max(16, Math.round(th * 0.45));
 
+    const fontFile = layer.fontName === "Bangers"
+      ? ""
+      : layer.fontName === "Inter"
+        ? "fontfile=/usr/share/fonts/truetype/open-sans/OpenSans-Bold.ttf:"
+        : "fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf:";
+
     /* Escape text for ffmpeg */
     const safeText = (layer.text || "")
       .replace(/\\/g, "\\\\")
@@ -195,6 +201,7 @@ function buildFFmpegArgs(inputPath, outputPath, config) {
 
     filterParts.push(
       `${currentStream}drawtext=` +
+      `${fontFile}` +
       `text='${safeText}':` +
       `fontcolor=${ffColor}:` +
       `fontsize=${fontSize}:` +

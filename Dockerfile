@@ -8,9 +8,13 @@ RUN npm install --omit=dev
 # ── Stage 2: runtime ───────────────────────────────────
 FROM node:20-slim
 
-# Install FFmpeg (static build — smaller than apt version on slim images)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg \
+      fonts-liberation \
+      fonts-open-sans \
+      fontconfig \
+ && fc-cache -fv \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
